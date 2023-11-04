@@ -4,30 +4,38 @@ on:
     branches:
       - main
 env:
-  REGISTRY: emanzek
-  IMAGE_NAME: demo-crud
+  IMAGE_NAME: emanzek/demo-crud
 jobs:
-  build:
+  scan:
     runs-on: ubuntu-latest
     steps:
-      - 
-        name: Perform Checkout
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-      -
-        name: Sonarqube scan
-        uses: sonarsource/sonarqube-scan-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      # If you wish to fail your job when the Quality Gate is red, uncomment the
-      # following lines. This would typically be used to fail a deployment.
-      # - uses: sonarsource/sonarqube-quality-gate-action@master
-      #   timeout-minutes: 5
-      #   env:
-      #     SONAR_TOKEN:
+    - 
+      name: Perform Checkout
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    -
+      name: Sonarqube Scan
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    - 
+      name: Sonarqube Quality Gateway
+      uses: sonarsource/sonarqube-quality-gate-action@master
+      id: sonarqube-quality-gate-check
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    - 
+      name: "SonarQube Quality Gate Status value"
+      run: echo "The Quality Gate status is ${{ steps.sonarqube-quality-gate-check.outputs.quality-gate-status }}"
 
+  build-and-push:
+    needs: scan
+    runs-on: ubuntu-latest
+    steps:
       -
         name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -41,8 +49,26 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       -
-        name: Build and push
+        name: Build Image
+        uses: docker/build-push-action@v5
+        with:
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:sample
+      - 
+        name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:sample
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+      -
+        name: Pushing Image
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          tags: ${{ env.IMAGE_NAME }}:latest,${{ env.IMAGE_NAME }}:${{ github.run_number }}
